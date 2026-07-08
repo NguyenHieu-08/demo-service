@@ -97,27 +97,71 @@ CREATE PROCEDURE `sp_search_welcome_message_templates`(
     IN `p_language_code` VARCHAR(50),
     IN `p_country_code` VARCHAR(50),
     IN `p_currency_code` VARCHAR(50),
-    IN `p_status` VARCHAR(20)
+    IN `p_status` VARCHAR(20),
+    IN `p_limit` INT,
+    IN `p_offset` INT,
+    OUT `p_total_records` INT
 )
 BEGIN
-    SELECT 
-        w.`id`, w.`subject`, w.`brand_id`, 
-        w.`language_code`, l.`name` AS `language_name`,
-        w.`country_code`, cn.`name` AS `country_name`,
-        w.`currency_code`, cr.`name` AS `currency_name`,
-        w.`status`, w.`message`, w.`show_at_login`, w.`created_added`, 
-        w.`last_update_by`, w.`last_update_date`
-    FROM `welcome_message_template` w
-    LEFT JOIN `language` l ON w.`language_code` = l.`language_code`
-    LEFT JOIN `country` cn ON w.`country_code` = cn.`country_code`
-    LEFT JOIN `currency` cr ON w.`currency_code` = cr.`currency_code`
-    WHERE (p_subject IS NULL OR p_subject = '' OR w.`subject` LIKE CONCAT('%', p_subject, '%'))
-      AND (p_brand_id IS NULL OR p_brand_id = 0 OR w.`brand_id` = p_brand_id)
-      AND (p_language_code IS NULL OR p_language_code = '' OR p_language_code = 'All' OR w.`language_code` = p_language_code)
-      AND (p_country_code IS NULL OR p_country_code = '' OR p_country_code = 'All' OR w.`country_code` = p_country_code)
-      AND (p_currency_code IS NULL OR p_currency_code = '' OR p_currency_code = 'All' OR w.`currency_code` = p_currency_code)
-      AND (p_status IS NULL OR p_status = '' OR p_status = 'All' OR w.`status` = p_status)
-    ORDER BY w.`last_update_date` DESC;
+    -- Build base query conditions
+    SET @sql_where = ' WHERE 1=1';
+    
+    IF p_subject IS NOT NULL AND p_subject <> '' THEN
+        SET @sql_where = CONCAT(@sql_where, ' AND w.subject LIKE ', QUOTE(CONCAT('%', p_subject, '%')));
+    END IF;
+    
+    IF p_brand_id IS NOT NULL AND p_brand_id <> 0 THEN
+        SET @sql_where = CONCAT(@sql_where, ' AND w.brand_id = ', p_brand_id);
+    END IF;
+    
+    IF p_language_code IS NOT NULL AND p_language_code <> '' AND p_language_code <> 'All' THEN
+        SET @sql_where = CONCAT(@sql_where, ' AND w.language_code = ', QUOTE(p_language_code));
+    END IF;
+    
+    IF p_country_code IS NOT NULL AND p_country_code <> '' AND p_country_code <> 'All' THEN
+        SET @sql_where = CONCAT(@sql_where, ' AND w.country_code = ', QUOTE(p_country_code));
+    END IF;
+    
+    IF p_currency_code IS NOT NULL AND p_currency_code <> '' AND p_currency_code <> 'All' THEN
+        SET @sql_where = CONCAT(@sql_where, ' AND w.currency_code = ', QUOTE(p_currency_code));
+    END IF;
+    
+    IF p_status IS NOT NULL AND p_status <> '' AND p_status <> 'All' THEN
+        SET @sql_where = CONCAT(@sql_where, ' AND w.status = ', QUOTE(p_status));
+    END IF;
+
+    -- 1. Get total records without pagination
+    SET @count_sql = CONCAT('SELECT COUNT(*) INTO @total_count FROM welcome_message_template w ', @sql_where);
+    PREPARE stmt_count FROM @count_sql;
+    EXECUTE stmt_count;
+    DEALLOCATE PREPARE stmt_count;
+    SET p_total_records = @total_count;
+
+    -- 2. Get paginated records
+    SET @data_sql = CONCAT('SELECT ',
+                           'w.id, w.subject, w.brand_id, ',
+                           'w.language_code, l.name AS language_name, ',
+                           'w.country_code, cn.name AS country_name, ',
+                           'w.currency_code, cr.name AS currency_name, ',
+                           'w.status, w.message, w.show_at_login, w.created_added, ',
+                           'w.last_update_by, w.last_update_date ',
+                           'FROM welcome_message_template w ',
+                           'LEFT JOIN language l ON w.language_code = l.language_code ',
+                           'LEFT JOIN country cn ON w.country_code = cn.country_code ',
+                           'LEFT JOIN currency cr ON w.currency_code = cr.currency_code ',
+                           @sql_where,
+                           ' ORDER BY w.last_update_date DESC');
+                           
+    IF p_limit IS NOT NULL AND p_limit > 0 THEN
+        SET @data_sql = CONCAT(@data_sql, ' LIMIT ', p_limit);
+        IF p_offset IS NOT NULL AND p_offset >= 0 THEN
+            SET @data_sql = CONCAT(@data_sql, ' OFFSET ', p_offset);
+        END IF;
+    END IF;
+    
+    PREPARE stmt_data FROM @data_sql;
+    EXECUTE stmt_data;
+    DEALLOCATE PREPARE stmt_data;
 END //
 
 -- 6. Check Unique Combination Stored Procedure
